@@ -1,0 +1,10 @@
+streamlit
+langchain
+langchain-community
+langchain-core
+langchainhub
+faiss-cpu
+pymupdf
+python-dotenv
+langchain-ollama
+langchain-community
