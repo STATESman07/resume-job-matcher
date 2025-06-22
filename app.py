@@ -1,7 +1,6 @@
 import os
 import re
 import tempfile
-
 import streamlit as st
 from dotenv import load_dotenv
 
@@ -49,9 +48,6 @@ if evaluate_button:
             loader = PyMuPDFLoader(resume_path)
             documents = loader.load()
 
-            st.subheader("📄 Resume Preview")
-            st.code(documents[0].page_content[:600], language="text")
-
             # Split into chunks
             splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
             split_docs = splitter.split_documents(documents)
@@ -62,35 +58,30 @@ if evaluate_button:
             retriever = vectorstore.as_retriever()
 
             # Prompt Template
-            prompt = ChatPromptTemplate.from_messages(
-                [
-                    (
-                        "system",
-                        """You are an expert resume evaluator. Based on the resume and the job description provided, analyze and return a structured evaluation report with the following sections:
+            prompt = ChatPromptTemplate.from_messages([
+                ("system",
+                """You are an expert resume evaluator. Based on the resume and the job description provided, analyze and return a structured evaluation report with the following sections:
 
-                    1. Fit Score: Return a numerical value from 0 to 100.
-                    2. Strengths: Bullet points of the candidate's key strengths relevant to the job.
-                    3. Weaknesses: Bullet points describing any potential gaps or concerns.
-                    4. Suggestions for Improvement: Bullet points suggesting actionable improvements to enhance the resume or qualifications.
-                    5. Top Skills: List of most relevant skills the candidate already possesses.
-                    6. Missing Skills: Important job-required skills that are not evident in the resume.
+1. Fit Score: Return a numerical value from 0 to 100.
+2. Strengths: Bullet points of the candidate's key strengths relevant to the job.
+3. Weaknesses: Bullet points describing any potential gaps or concerns.
+4. Suggestions: Bullet points suggesting actionable improvements to enhance the resume or qualifications.
+5. Top Skills: List of most relevant skills the candidate already possesses.
+6. Missing Skills: Important job-required skills that are not evident in the resume.
 
-                    Formatting Guidelines:
-                    - Format each section with a clear header followed by bullet points.
-                    - Do NOT repeat the section title inside bullet points.
-                    - Do NOT include any extra explanations or comments outside the defined sections.
-                    - Do NOT output anything except the report in this format.
+Formatting Guidelines:
+- Format each section with a clear header followed by bullet points.
+- Do NOT repeat the section title inside bullet points.
+- Do NOT include any extra explanations or comments outside the defined sections.
+- Do NOT output anything except the report in this format.
 
-                    Resume:
-                    {context}
+Resume:
+{context}
 
-                    Job Description:
-                    """
-                        + job_description,
-                    ),
-                    ("human", "{input}"),
-                ]
-            )
+Job Description:
+""" + job_description),
+                ("human", "{input}"),
+            ])
 
             # LLM and Retrieval Chain
             llm = OllamaLLM(model="gemma3:1b")
@@ -102,49 +93,58 @@ if evaluate_button:
             response = retrieval_chain.invoke({"input": query})
             full_output = response["answer"]
 
-            # Display Output
-            st.success("✅ Evaluation Complete")
-            st.subheader("📝 Evaluation Report")
-
-            # 1. Extract and display Fit Score as %
-            fit_score_match = re.search(r"(?i)fit score\s*[:\-]?\s*(\d+)", full_output)
+            # Extract and display Fit Score
+            fit_score_match = re.search(r"\*\*1\. Fit Score:\*\*\s*(\d+)", full_output)
             if fit_score_match:
                 fit_score = int(fit_score_match.group(1))
-                fit_score = max(0, min(100, fit_score))  # Clamp value between 0–100
+                fit_score = max(0, min(100, fit_score))  # Clamp value
                 st.markdown(f"## 🔢 Fit Score: `{fit_score}%`")
                 st.progress(fit_score / 100.0)
 
-            # 2. Extract and format sections with Markdown
-            section_titles = {
-                "Strengths": "💪 Strengths",
-                "Weaknesses": "⚠️ Weaknesses",
-                "Suggestions": "🛠️ Suggestions for Improvement",
-                "Top Skills": "🚀 Top Skills",
-                "Missing Skills": "❌ Missing Skills",
+            st.success("✅ Evaluation Complete")
+            st.subheader("📝 Evaluation Report")
+
+            # Section titles to icons
+            section_icons = {
+                "Strengths": "💪",
+                "Weaknesses": "⚠️",
+                "Suggestions": "🛠️",
+                "Top Skills": "🚀",
+                "Missing Skills": "❌",
             }
 
-            # Split the full output into sections
-            sections = re.split(
-                r"\n(?=(?:Strengths|Weaknesses|Suggestions|Top Skills|Missing Skills)\s*:)",
-                full_output,
-            )
+            # Parse sections
+            sections = {}
+            section_pattern = re.compile(r"\*\*\d+\.\s*(.*?)\s*:\*\*")
+            matches = list(section_pattern.finditer(full_output))
 
-            displayed = False
-            for section in sections:
-                for key, title in section_titles.items():
-                    if section.lower().startswith(key.lower()):
-                        content = section.split(":", 1)[-1].strip()
-                        st.markdown(f"## {title}")
-                        for line in content.split("\n"):
-                            if line.strip().startswith("-") or line.strip().startswith(
-                                "•"
-                            ):
-                                st.markdown(f"- {line.strip().lstrip('-• ').strip()}")
-                        displayed = True
-                        break
+            for idx, match in enumerate(matches):
+                section_name = match.group(1).strip()
+                start = match.end()
+                end = matches[idx + 1].start() if idx + 1 < len(matches) else len(full_output)
+                content_block = full_output[start:end].strip()
 
-            if not displayed:
-                st.markdown(full_output)
+                # Extract bullet points
+                bullets = [
+                    line.strip(" *").strip()
+                    for line in content_block.splitlines()
+                    if line.strip().startswith("*")
+                ]
+                sections[section_name] = bullets
+
+            # Render sections
+            any_displayed = False
+            for title, icon in section_icons.items():
+                if title in sections:
+                    st.markdown(f"### {icon} {title}")
+                    for bullet in sections[title]:
+                        st.markdown(f"- {bullet}")
+                    any_displayed = True
+
+            # Fallback
+            if not any_displayed:
+                st.warning("⚠️ Could not extract structured sections. Showing raw output.")
+                st.code(full_output)
 
     except Exception as e:
         st.error(f"❌ An error occurred: {str(e)}")
